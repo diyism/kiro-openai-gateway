@@ -48,6 +48,7 @@ from kiro_gateway.config import (
     PROXY_API_KEY,
     LOG_LEVEL,
     _warn_deprecated_debug_setting,
+    _warn_timeout_configuration,
 )
 from kiro_gateway.auth import KiroAuthManager
 from kiro_gateway.cache import ModelInfoCache
@@ -67,20 +68,20 @@ logger.add(
 
 class InterceptHandler(logging.Handler):
     """
-    Перехватывает логи из стандартного logging и перенаправляет в loguru.
+    Intercepts logs from standard logging and redirects them to loguru.
     
-    Это позволяет захватывать логи uvicorn, FastAPI и других библиотек,
-    которые используют стандартный logging вместо loguru.
+    This allows capturing logs from uvicorn, FastAPI and other libraries
+    that use standard logging instead of loguru.
     """
     
     def emit(self, record: logging.LogRecord) -> None:
-        # Получаем соответствующий уровень loguru
+        # Get the corresponding loguru level
         try:
             level = logger.level(record.levelname).name
         except ValueError:
             level = record.levelno
         
-        # Находим вызывающий фрейм для корректного отображения источника
+        # Find the caller frame for correct source display
         frame, depth = logging.currentframe(), 2
         while frame.f_code.co_filename == logging.__file__:
             frame = frame.f_back
@@ -91,15 +92,15 @@ class InterceptHandler(logging.Handler):
 
 def setup_logging_intercept():
     """
-    Настраивает перехват логов из стандартного logging в loguru.
+    Configures log interception from standard logging to loguru.
     
-    Перехватывает логи от:
+    Intercepts logs from:
     - uvicorn (access logs, error logs)
     - uvicorn.error
     - uvicorn.access
     - fastapi
     """
-    # Список логгеров для перехвата
+    # List of loggers to intercept
     loggers_to_intercept = [
         "uvicorn",
         "uvicorn.error",
@@ -113,7 +114,7 @@ def setup_logging_intercept():
         logging_logger.propagate = False
 
 
-# Настраиваем перехват логов uvicorn/fastapi
+# Configure uvicorn/fastapi log interception
 setup_logging_intercept()
 
 
@@ -207,20 +208,23 @@ validate_configuration()
 # Warn about deprecated DEBUG_LAST_REQUEST if used
 _warn_deprecated_debug_setting()
 
+# Warn about suboptimal timeout configuration
+_warn_timeout_configuration()
+
 
 # --- Lifespan Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Управляет жизненным циклом приложения.
+    Manages the application lifecycle.
     
-    Создаёт и инициализирует:
-    - KiroAuthManager для управления токенами
-    - ModelInfoCache для кэширования моделей
+    Creates and initializes:
+    - KiroAuthManager for token management
+    - ModelInfoCache for model caching
     """
     logger.info("Starting application... Creating state managers.")
     
-    # Создаём AuthManager
+    # Create AuthManager
     app.state.auth_manager = KiroAuthManager(
         refresh_token=REFRESH_TOKEN,
         profile_arn=PROFILE_ARN,
@@ -228,7 +232,7 @@ async def lifespan(app: FastAPI):
         creds_file=KIRO_CREDS_FILE if KIRO_CREDS_FILE else None
     )
     
-    # Создаём кэш моделей
+    # Create model cache
     app.state.model_cache = ModelInfoCache()
     
     yield
@@ -236,7 +240,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down application.")
 
 
-# --- FastAPI приложение ---
+# --- FastAPI Application ---
 app = FastAPI(
     title=APP_TITLE,
     description=APP_DESCRIPTION,
@@ -246,28 +250,28 @@ app = FastAPI(
 
 
 # --- CORS Middleware ---
-# Разрешаем CORS для всех источников, чтобы поддерживать браузерные клиенты
-# и инструменты, которые отправляют preflight OPTIONS запросы
+# Allow CORS for all origins to support browser clients
+# and tools that send preflight OPTIONS requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Разрешаем все источники
+    allow_origins=["*"],  # Allow all origins
     allow_credentials=True,
-    allow_methods=["*"],  # Разрешаем все методы (GET, POST, OPTIONS, etc.)
-    allow_headers=["*"],  # Разрешаем все заголовки
+    allow_methods=["*"],  # Allow all methods (GET, POST, OPTIONS, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
 
 
-# --- Регистрация обработчика ошибок валидации ---
+# --- Validation Error Handler Registration ---
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 
-# --- Подключение роутов ---
+# --- Route Registration ---
 app.include_router(router)
 
 
 # --- Uvicorn log config ---
-# Минимальная конфигурация для перенаправления логов uvicorn в loguru.
-# Использует InterceptHandler, который перехватывает логи и передаёт их в loguru.
+# Minimal configuration for redirecting uvicorn logs to loguru.
+# Uses InterceptHandler which intercepts logs and passes them to loguru.
 UVICORN_LOG_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -284,7 +288,7 @@ UVICORN_LOG_CONFIG = {
 }
 
 
-# --- Точка входа ---
+# --- Entry Point ---
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting Uvicorn server...")

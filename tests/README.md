@@ -338,7 +338,7 @@ Unit tests for **ModelInfoCache** (model metadata cache). **23 tests.**
 
 ### `tests/unit/test_config.py`
 
-Unit tests for **configuration module** (loading settings from environment variables). **9 tests.**
+Unit tests for **configuration module** (loading settings from environment variables). **13 tests.**
 
 #### `TestLogLevelConfig`
 
@@ -383,6 +383,26 @@ Tests for TOOL_DESCRIPTION_MAX_LENGTH configuration.
 - **`test_tool_description_max_length_zero_disables()`**:
   - **What it does**: Verifies that 0 disables the feature
   - **Purpose**: Ensure TOOL_DESCRIPTION_MAX_LENGTH=0 works
+
+#### `TestTimeoutConfigurationWarning`
+
+Tests for `_warn_timeout_configuration()` function.
+
+- **`test_no_warning_when_first_token_less_than_streaming()`**:
+  - **What it does**: Verifies no warning when FIRST_TOKEN_TIMEOUT < STREAMING_READ_TIMEOUT
+  - **Purpose**: Ensure correct configuration doesn't trigger warning
+
+- **`test_warning_when_first_token_equals_streaming()`**:
+  - **What it does**: Verifies warning when FIRST_TOKEN_TIMEOUT == STREAMING_READ_TIMEOUT
+  - **Purpose**: Ensure equal timeouts trigger warning
+
+- **`test_warning_when_first_token_greater_than_streaming()`**:
+  - **What it does**: Verifies warning when FIRST_TOKEN_TIMEOUT > STREAMING_READ_TIMEOUT
+  - **Purpose**: Ensure suboptimal configuration triggers warning with timeout values
+
+- **`test_warning_contains_recommendation()`**:
+  - **What it does**: Verifies warning contains recommendation text
+  - **Purpose**: Ensure user gets helpful information about correct configuration
 
 ---
 
@@ -1077,7 +1097,7 @@ Integration tests for tokenizer.
 
 ### `tests/unit/test_streaming.py`
 
-Unit tests for **streaming module** (Kiro to OpenAI format stream conversion). **16 tests.**
+Unit tests for **streaming module** (Kiro to OpenAI format stream conversion). **23 tests.**
 
 #### `TestStreamingToolCallsIndex`
 
@@ -1153,11 +1173,39 @@ Tests for error handling in streaming module (bug #8 fix).
 
 #### `TestFirstTokenTimeoutError`
 
-Tests for FirstTokenTimeoutError.
+Tests for FirstTokenTimeoutError and first token timeout logging.
 
 - **`test_first_token_timeout_not_caught_by_general_handler()`**:
   - **What it does**: Verifies that FirstTokenTimeoutError is propagated for retry
   - **Purpose**: Ensure first token timeout is not handled as regular error
+
+- **`test_first_token_timeout_logged_with_correct_format()`**:
+  - **What it does**: Verifies that first token timeout is logged with [FirstTokenTimeout] prefix
+  - **Purpose**: Ensure consistent logging format for first token timeout
+
+- **`test_first_token_timeout_includes_timeout_value()`**:
+  - **What it does**: Verifies that first token timeout log includes the timeout value
+  - **Purpose**: Ensure timeout value is visible in logs for debugging
+
+- **`test_first_token_received_logged_on_success()`**:
+  - **What it does**: Verifies that successful first token receipt is logged
+  - **Purpose**: Ensure debug log shows when first token is received
+
+#### `TestStreamWithFirstTokenRetry`
+
+Tests for stream_with_first_token_retry function.
+
+- **`test_retry_on_first_token_timeout()`**:
+  - **What it does**: Verifies that request is retried on first token timeout
+  - **Purpose**: Ensure retry logic works for first token timeout
+
+- **`test_all_retries_exhausted_raises_504()`**:
+  - **What it does**: Verifies that 504 is raised after all retries exhausted
+  - **Purpose**: Ensure proper error handling when model never responds
+
+- **`test_retry_logs_attempt_number()`**:
+  - **What it does**: Verifies that retry attempts are logged with attempt number
+  - **Purpose**: Ensure logs show which attempt failed (e.g., "1/3", "2/3", "3/3")
 
 ---
 
@@ -1203,13 +1251,13 @@ Unit tests for **KiroHttpClient** (HTTP client with retry logic). **29 tests.**
 
 - **`test_backoff_delay_increases_exponentially()`**: Verifies exponential delay increase
 
-#### `TestKiroHttpClientFirstTokenTimeout`
+#### `TestKiroHttpClientStreamingTimeout`
 
-**New tests for first token timeout logic for streaming requests:**
+Tests for streaming timeout logic (httpx timeouts, not FIRST_TOKEN_TIMEOUT).
 
-- **`test_streaming_uses_first_token_timeout()`**:
-  - **What it does**: Verifies that streaming requests use FIRST_TOKEN_TIMEOUT
-  - **Purpose**: Ensure short timeout is used for stream=True
+- **`test_streaming_uses_streaming_read_timeout()`**:
+  - **What it does**: Verifies that streaming requests use STREAMING_READ_TIMEOUT for read timeout
+  - **Purpose**: Ensure httpx.Timeout is configured with connect=30s and read=STREAMING_READ_TIMEOUT
 
 - **`test_streaming_uses_first_token_max_retries()`**:
   - **What it does**: Verifies that streaming requests use FIRST_TOKEN_MAX_RETRIES
@@ -1217,19 +1265,23 @@ Unit tests for **KiroHttpClient** (HTTP client with retry logic). **29 tests.**
 
 - **`test_streaming_timeout_retry_without_delay()`**:
   - **What it does**: Verifies that streaming timeout retry happens without delay
-  - **Purpose**: Ensure no exponential backoff on first token timeout
+  - **Purpose**: Ensure no exponential backoff on streaming timeout
 
 - **`test_non_streaming_uses_default_timeout()`**:
-  - **What it does**: Verifies that non-streaming requests use 300 seconds
-  - **Purpose**: Ensure long timeout is used for stream=False
+  - **What it does**: Verifies that non-streaming requests use httpx.Timeout(timeout=300)
+  - **Purpose**: Ensure unified 300s timeout for all operations in non-streaming mode
 
-- **`test_custom_first_token_timeout()`**:
-  - **What it does**: Verifies custom first_token_timeout usage
-  - **Purpose**: Ensure first_token_timeout parameter overrides default
+- **`test_connect_timeout_logged_correctly()`**:
+  - **What it does**: Verifies that ConnectTimeout is logged with [ConnectTimeout] prefix
+  - **Purpose**: Ensure timeout type is visible in logs for debugging
 
-- **`test_streaming_timeout_returns_504()`**:
-  - **What it does**: Verifies that streaming timeout returns 504
-  - **Purpose**: Ensure 504 Gateway Timeout is returned after retries exhausted
+- **`test_read_timeout_logged_correctly()`**:
+  - **What it does**: Verifies that ReadTimeout is logged with [ReadTimeout] prefix and STREAMING_READ_TIMEOUT value
+  - **Purpose**: Ensure timeout type and value are visible in logs
+
+- **`test_streaming_timeout_returns_504_with_error_type()`**:
+  - **What it does**: Verifies that streaming timeout returns 504 with error type in detail
+  - **Purpose**: Ensure 504 Gateway Timeout includes error type (e.g., "ReadTimeout")
 
 - **`test_non_streaming_timeout_returns_502()`**:
   - **What it does**: Verifies that non-streaming timeout returns 502

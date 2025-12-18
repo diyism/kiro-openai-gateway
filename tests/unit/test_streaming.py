@@ -728,7 +728,7 @@ class TestStreamingErrorHandling:
 
 
 class TestFirstTokenTimeoutError:
-    """Tests for FirstTokenTimeoutError."""
+    """Tests for FirstTokenTimeoutError and first token timeout logging."""
     
     @pytest.mark.asyncio
     async def test_first_token_timeout_not_caught_by_general_handler(self, mock_http_client, mock_model_cache, mock_auth_manager):
@@ -772,3 +772,323 @@ class TestFirstTokenTimeoutError:
         # Verify response was closed
         mock_response.aclose.assert_called()
         print("✓ response.aclose() was called")
+    
+    @pytest.mark.asyncio
+    async def test_first_token_timeout_logged_with_correct_format(self, mock_http_client, mock_model_cache, mock_auth_manager):
+        """
+        What it does: Verifies that first token timeout is logged with [FirstTokenTimeout] prefix.
+        Goal: Ensure consistent logging format for first token timeout.
+        """
+        import asyncio
+        from kiro_gateway.streaming import FirstTokenTimeoutError, stream_kiro_to_openai_internal
+        
+        print("Setup: Mock response with timeout...")
+        
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.aclose = AsyncMock()
+        
+        async def mock_aiter_bytes():
+            yield b'{"content":"test"}'
+        
+        mock_response.aiter_bytes = mock_aiter_bytes
+        
+        async def mock_wait_for_timeout(*args, **kwargs):
+            raise asyncio.TimeoutError()
+        
+        print("Action: Running streaming with timeout and checking logs...")
+        
+        with patch('kiro_gateway.streaming.asyncio.wait_for', side_effect=mock_wait_for_timeout):
+            with patch('kiro_gateway.streaming.logger') as mock_logger:
+                try:
+                    async for chunk in stream_kiro_to_openai_internal(
+                        mock_http_client, mock_response, "test-model",
+                        mock_model_cache, mock_auth_manager,
+                        first_token_timeout=15
+                    ):
+                        pass
+                except FirstTokenTimeoutError:
+                    pass
+                
+                print("Check: logger.warning should be called with [FirstTokenTimeout]...")
+                warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+                print(f"Warning calls: {warning_calls}")
+                
+                assert any("FirstTokenTimeout" in call for call in warning_calls), \
+                    f"[FirstTokenTimeout] not found in warning logs: {warning_calls}"
+                print("✓ [FirstTokenTimeout] prefix found in logs")
+    
+    @pytest.mark.asyncio
+    async def test_first_token_timeout_includes_timeout_value(self, mock_http_client, mock_model_cache, mock_auth_manager):
+        """
+        What it does: Verifies that first token timeout log includes the timeout value.
+        Goal: Ensure timeout value is visible in logs for debugging.
+        """
+        import asyncio
+        from kiro_gateway.streaming import FirstTokenTimeoutError, stream_kiro_to_openai_internal
+        
+        print("Setup: Mock response with timeout...")
+        
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.aclose = AsyncMock()
+        
+        async def mock_aiter_bytes():
+            yield b'{"content":"test"}'
+        
+        mock_response.aiter_bytes = mock_aiter_bytes
+        
+        async def mock_wait_for_timeout(*args, **kwargs):
+            raise asyncio.TimeoutError()
+        
+        custom_timeout = 25.0
+        
+        print(f"Action: Running streaming with custom timeout={custom_timeout}...")
+        
+        with patch('kiro_gateway.streaming.asyncio.wait_for', side_effect=mock_wait_for_timeout):
+            with patch('kiro_gateway.streaming.logger') as mock_logger:
+                try:
+                    async for chunk in stream_kiro_to_openai_internal(
+                        mock_http_client, mock_response, "test-model",
+                        mock_model_cache, mock_auth_manager,
+                        first_token_timeout=custom_timeout
+                    ):
+                        pass
+                except FirstTokenTimeoutError:
+                    pass
+                
+                print("Check: logger.warning should include timeout value...")
+                warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+                print(f"Warning calls: {warning_calls}")
+                
+                assert any(str(custom_timeout) in call for call in warning_calls), \
+                    f"Timeout value {custom_timeout} not found in warning logs: {warning_calls}"
+                print(f"✓ Timeout value {custom_timeout} found in logs")
+    
+    @pytest.mark.asyncio
+    async def test_first_token_received_logged_on_success(self, mock_http_client, mock_model_cache, mock_auth_manager):
+        """
+        What it does: Verifies that successful first token receipt is logged.
+        Goal: Ensure debug log shows when first token is received.
+        """
+        from kiro_gateway.streaming import stream_kiro_to_openai_internal
+        
+        print("Setup: Mock response with successful first token...")
+        
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.aclose = AsyncMock()
+        
+        async def mock_aiter_bytes():
+            yield b'{"content":"Hello"}'
+        
+        mock_response.aiter_bytes = mock_aiter_bytes
+        
+        mock_parser = MagicMock()
+        mock_parser.feed.return_value = [{"type": "content", "data": "Hello"}]
+        mock_parser.get_tool_calls.return_value = []
+        
+        print("Action: Running streaming and checking debug logs...")
+        
+        with patch('kiro_gateway.streaming.AwsEventStreamParser', return_value=mock_parser):
+            with patch('kiro_gateway.streaming.parse_bracket_tool_calls', return_value=[]):
+                with patch('kiro_gateway.streaming.logger') as mock_logger:
+                    chunks = []
+                    async for chunk in stream_kiro_to_openai_internal(
+                        mock_http_client, mock_response, "test-model",
+                        mock_model_cache, mock_auth_manager,
+                        first_token_timeout=15
+                    ):
+                        chunks.append(chunk)
+                    
+                    print(f"Received {len(chunks)} chunks")
+                    print("Check: logger.debug should be called with 'First token received'...")
+                    debug_calls = [str(call) for call in mock_logger.debug.call_args_list]
+                    print(f"Debug calls: {debug_calls}")
+                    
+                    assert any("First token received" in call for call in debug_calls), \
+                        f"'First token received' not found in debug logs: {debug_calls}"
+                    print("✓ 'First token received' found in debug logs")
+
+
+class TestStreamWithFirstTokenRetry:
+    """Tests for stream_with_first_token_retry function."""
+    
+    @pytest.mark.asyncio
+    async def test_retry_on_first_token_timeout(self, mock_http_client, mock_model_cache, mock_auth_manager):
+        """
+        What it does: Verifies that request is retried on first token timeout.
+        Goal: Ensure retry logic works for first token timeout.
+        """
+        import asyncio
+        from kiro_gateway.streaming import stream_with_first_token_retry, FirstTokenTimeoutError
+        
+        print("Setup: Mock make_request that succeeds on second attempt...")
+        
+        mock_response_success = AsyncMock()
+        mock_response_success.status_code = 200
+        mock_response_success.aclose = AsyncMock()
+        
+        async def mock_aiter_bytes_success():
+            yield b'{"content":"Success"}'
+        
+        mock_response_success.aiter_bytes = mock_aiter_bytes_success
+        
+        call_count = 0
+        
+        async def mock_make_request():
+            nonlocal call_count
+            call_count += 1
+            print(f"make_request called (attempt {call_count})")
+            return mock_response_success
+        
+        mock_parser = MagicMock()
+        mock_parser.feed.return_value = [{"type": "content", "data": "Success"}]
+        mock_parser.get_tool_calls.return_value = []
+        
+        # First call raises timeout, second succeeds
+        timeout_raised = False
+        
+        async def mock_wait_for_with_retry(coro, timeout):
+            nonlocal timeout_raised
+            if not timeout_raised:
+                timeout_raised = True
+                raise asyncio.TimeoutError()
+            return await coro
+        
+        print("Action: Running stream_with_first_token_retry...")
+        
+        with patch('kiro_gateway.streaming.AwsEventStreamParser', return_value=mock_parser):
+            with patch('kiro_gateway.streaming.parse_bracket_tool_calls', return_value=[]):
+                with patch('kiro_gateway.streaming.asyncio.wait_for', side_effect=mock_wait_for_with_retry):
+                    chunks = []
+                    async for chunk in stream_with_first_token_retry(
+                        mock_make_request,
+                        mock_http_client,
+                        "test-model",
+                        mock_model_cache,
+                        mock_auth_manager,
+                        max_retries=3,
+                        first_token_timeout=15
+                    ):
+                        chunks.append(chunk)
+        
+        print(f"Received {len(chunks)} chunks")
+        print(f"make_request was called {call_count} times")
+        
+        assert call_count == 2, f"Expected 2 calls (1 timeout + 1 success), got {call_count}"
+        assert len(chunks) > 0, "Should receive chunks after retry"
+        print("✓ Retry logic worked correctly")
+    
+    @pytest.mark.asyncio
+    async def test_all_retries_exhausted_raises_504(self, mock_http_client, mock_model_cache, mock_auth_manager):
+        """
+        What it does: Verifies that 504 is raised after all retries exhausted.
+        Goal: Ensure proper error handling when model never responds.
+        """
+        import asyncio
+        from fastapi import HTTPException
+        from kiro_gateway.streaming import stream_with_first_token_retry
+        
+        print("Setup: Mock make_request that always times out...")
+        
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.aclose = AsyncMock()
+        
+        async def mock_aiter_bytes():
+            yield b'{"content":"test"}'
+        
+        mock_response.aiter_bytes = mock_aiter_bytes
+        
+        call_count = 0
+        
+        async def mock_make_request():
+            nonlocal call_count
+            call_count += 1
+            print(f"make_request called (attempt {call_count})")
+            return mock_response
+        
+        async def mock_wait_for_always_timeout(*args, **kwargs):
+            raise asyncio.TimeoutError()
+        
+        max_retries = 3
+        
+        print(f"Action: Running stream_with_first_token_retry with max_retries={max_retries}...")
+        
+        with patch('kiro_gateway.streaming.asyncio.wait_for', side_effect=mock_wait_for_always_timeout):
+            with pytest.raises(HTTPException) as exc_info:
+                async for chunk in stream_with_first_token_retry(
+                    mock_make_request,
+                    mock_http_client,
+                    "test-model",
+                    mock_model_cache,
+                    mock_auth_manager,
+                    max_retries=max_retries,
+                    first_token_timeout=15
+                ):
+                    pass
+        
+        print(f"Caught HTTPException: {exc_info.value.status_code} - {exc_info.value.detail}")
+        print(f"make_request was called {call_count} times")
+        
+        print(f"Сравниваем status_code: Ожидалось 504, Получено {exc_info.value.status_code}")
+        assert exc_info.value.status_code == 504
+        print(f"Сравниваем call_count: Ожидалось {max_retries}, Получено {call_count}")
+        assert call_count == max_retries
+        assert "15" in exc_info.value.detail, "Timeout value should be in error message"
+        print("✓ 504 raised after all retries exhausted")
+    
+    @pytest.mark.asyncio
+    async def test_retry_logs_attempt_number(self, mock_http_client, mock_model_cache, mock_auth_manager):
+        """
+        What it does: Verifies that retry attempts are logged with attempt number.
+        Goal: Ensure logs show which attempt failed.
+        """
+        import asyncio
+        from fastapi import HTTPException
+        from kiro_gateway.streaming import stream_with_first_token_retry
+        
+        print("Setup: Mock make_request that always times out...")
+        
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.aclose = AsyncMock()
+        
+        async def mock_aiter_bytes():
+            yield b'{"content":"test"}'
+        
+        mock_response.aiter_bytes = mock_aiter_bytes
+        
+        async def mock_make_request():
+            return mock_response
+        
+        async def mock_wait_for_always_timeout(*args, **kwargs):
+            raise asyncio.TimeoutError()
+        
+        print("Action: Running stream_with_first_token_retry and checking logs...")
+        
+        with patch('kiro_gateway.streaming.asyncio.wait_for', side_effect=mock_wait_for_always_timeout):
+            with patch('kiro_gateway.streaming.logger') as mock_logger:
+                try:
+                    async for chunk in stream_with_first_token_retry(
+                        mock_make_request,
+                        mock_http_client,
+                        "test-model",
+                        mock_model_cache,
+                        mock_auth_manager,
+                        max_retries=3,
+                        first_token_timeout=15
+                    ):
+                        pass
+                except HTTPException:
+                    pass
+                
+                print("Check: logger.warning should include attempt numbers...")
+                warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+                print(f"Warning calls: {warning_calls}")
+                
+                # Should have warnings for attempts 1/3, 2/3, 3/3
+                assert any("1/3" in call or "2/3" in call or "3/3" in call for call in warning_calls), \
+                    f"Attempt numbers not found in warning logs: {warning_calls}"
+                print("✓ Attempt numbers found in logs")

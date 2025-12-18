@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Kiro OpenAI Gateway
+# https://github.com/jwadow/kiro-openai-gateway
 # Copyright (C) 2025 Jwadow
 #
 # This program is free software: you can redistribute it and/or modify
@@ -17,13 +18,13 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
-HTTP клиент для Kiro API с поддержкой retry логики.
+HTTP client for Kiro API with retry logic support.
 
-Обрабатывает:
-- 403: автоматический refresh токена и повтор
+Handles:
+- 403: automatic token refresh and retry
 - 429: exponential backoff
 - 5xx: exponential backoff
-- Таймауты: exponential backoff
+- Timeouts: exponential backoff
 """
 
 import asyncio
@@ -33,23 +34,23 @@ import httpx
 from fastapi import HTTPException
 from loguru import logger
 
-from kiro_gateway.config import MAX_RETRIES, BASE_RETRY_DELAY, FIRST_TOKEN_TIMEOUT, FIRST_TOKEN_MAX_RETRIES, STREAMING_READ_TIMEOUT
+from kiro_gateway.config import MAX_RETRIES, BASE_RETRY_DELAY, FIRST_TOKEN_MAX_RETRIES, STREAMING_READ_TIMEOUT
 from kiro_gateway.auth import KiroAuthManager
 from kiro_gateway.utils import get_kiro_headers
 
 
 class KiroHttpClient:
     """
-    HTTP клиент для Kiro API с поддержкой retry логики.
+    HTTP client for Kiro API with retry logic support.
     
-    Автоматически обрабатывает ошибки и повторяет запросы:
-    - 403: обновляет токен и повторяет
-    - 429: ждёт с exponential backoff
-    - 5xx: ждёт с exponential backoff
-    - Таймауты: ждёт с exponential backoff
+    Automatically handles errors and retries requests:
+    - 403: refreshes token and retries
+    - 429: waits with exponential backoff
+    - 5xx: waits with exponential backoff
+    - Timeouts: waits with exponential backoff
     Attributes:
-        auth_manager: Менеджер аутентификации для получения токенов
-        client: HTTP клиент httpx
+        auth_manager: Authentication manager for obtaining tokens
+        client: httpx HTTP client
     
     Example:
         >>> client = KiroHttpClient(auth_manager)
@@ -63,43 +64,57 @@ class KiroHttpClient:
     
     def __init__(self, auth_manager: KiroAuthManager):
         """
-        Инициализирует HTTP клиент.
+        Initializes the HTTP client.
         
         Args:
-            auth_manager: Менеджер аутентификации
+            auth_manager: Authentication manager
         """
         self.auth_manager = auth_manager
         self.client: Optional[httpx.AsyncClient] = None
     
-    async def _get_client(self, timeout: float = 300, stream: bool = False) -> httpx.AsyncClient:
+    async def _get_client(self, stream: bool = False) -> httpx.AsyncClient:
         """
-        Возвращает или создаёт HTTP клиент.
+        Returns or creates an HTTP client with proper timeouts.
+        
+        httpx timeouts:
+        - connect: TCP handshake (DNS + TCP SYN/ACK)
+        - read: waiting for data from server between chunks
+        - write: sending data to server
+        - pool: waiting for free connection from pool
+        
+        IMPORTANT: FIRST_TOKEN_TIMEOUT is NOT used here!
+        It is applied in streaming.py via asyncio.wait_for() to control
+        the wait time for the first token from the model (retry business logic).
         
         Args:
-            timeout: Таймаут для запросов (секунды)
-            stream: Если True, использует отдельный read timeout для streaming
+            stream: If True, uses STREAMING_READ_TIMEOUT for read
         
         Returns:
-            Активный HTTP клиент
+            Active HTTP client
         """
         if self.client is None or self.client.is_closed:
             if stream:
-                # For streaming: use short connect timeout but long read timeout
-                # This allows quick retry on connection issues while giving
-                # the model plenty of time to generate responses between chunks
+                # For streaming:
+                # - connect: 30 sec (TCP connection, usually < 1 sec)
+                # - read: STREAMING_READ_TIMEOUT (300 sec) - model may "think" between chunks
+                # - write/pool: standard values
                 timeout_config = httpx.Timeout(
-                    connect=timeout,  # Connection timeout (FIRST_TOKEN_TIMEOUT)
-                    read=STREAMING_READ_TIMEOUT,  # Read timeout for chunks (5 min default)
-                    write=30.0,  # Write timeout
-                    pool=30.0  # Pool timeout
+                    connect=30.0,
+                    read=STREAMING_READ_TIMEOUT,
+                    write=30.0,
+                    pool=30.0
                 )
+                logger.debug(f"Creating streaming HTTP client (read_timeout={STREAMING_READ_TIMEOUT}s)")
             else:
-                timeout_config = timeout
+                # For regular requests: single timeout of 300 sec
+                timeout_config = httpx.Timeout(timeout=300.0)
+                logger.debug("Creating non-streaming HTTP client (timeout=300s)")
+            
             self.client = httpx.AsyncClient(timeout=timeout_config, follow_redirects=True)
         return self.client
     
     async def close(self) -> None:
-        """Закрывает HTTP клиент."""
+        """Closes the HTTP client."""
         if self.client and not self.client.is_closed:
             await self.client.aclose()
     
@@ -108,46 +123,42 @@ class KiroHttpClient:
         method: str,
         url: str,
         json_data: dict,
-        stream: bool = False,
-        first_token_timeout: float = None
+        stream: bool = False
     ) -> httpx.Response:
         """
-        Выполняет HTTP запрос с retry логикой.
+        Executes an HTTP request with retry logic.
         
-        Автоматически обрабатывает различные типы ошибок:
-        - 403: обновляет токен через auth_manager.force_refresh() и повторяет
-        - 429: ждёт с exponential backoff (1s, 2s, 4s)
-        - 5xx: ждёт с exponential backoff
-        - Таймауты: ждёт с exponential backoff (для streaming - retry при first token timeout)
+        Automatically handles various error types:
+        - 403: refreshes token via auth_manager.force_refresh() and retries
+        - 429: waits with exponential backoff (1s, 2s, 4s)
+        - 5xx: waits with exponential backoff
+        - Timeouts: waits with exponential backoff
+        
+        For streaming, STREAMING_READ_TIMEOUT is used for waiting between chunks.
+        First token timeout is controlled separately in streaming.py via asyncio.wait_for().
         
         Args:
-            method: HTTP метод (GET, POST, etc.)
-            url: URL запроса
-            json_data: Тело запроса (JSON)
-            stream: Использовать streaming (по умолчанию False)
-            first_token_timeout: Таймаут ожидания первого ответа для streaming (секунды).
-                                 Если None, используется FIRST_TOKEN_TIMEOUT из config.
+            method: HTTP method (GET, POST, etc.)
+            url: Request URL
+            json_data: Request body (JSON)
+            stream: Use streaming (default False)
         
         Returns:
-            httpx.Response с успешным ответом
+            httpx.Response with successful response
         
         Raises:
-            HTTPException: При неудаче после всех попыток (502)
+            HTTPException: On failure after all attempts (502/504)
         """
-        # Для streaming используем first_token_timeout, для обычных запросов - 300 секунд
-        if stream:
-            timeout = first_token_timeout if first_token_timeout is not None else FIRST_TOKEN_TIMEOUT
-            max_retries = FIRST_TOKEN_MAX_RETRIES
-        else:
-            timeout = 300
-            max_retries = MAX_RETRIES
+        # Determine the number of retry attempts
+        # FIRST_TOKEN_TIMEOUT is used in streaming.py, not here
+        max_retries = FIRST_TOKEN_MAX_RETRIES if stream else MAX_RETRIES
         
-        client = await self._get_client(timeout, stream=stream)
+        client = await self._get_client(stream=stream)
         last_error = None
         
         for attempt in range(max_retries):
             try:
-                # Получаем актуальный токен
+                # Get current token
                 token = await self.auth_manager.get_access_token()
                 headers = get_kiro_headers(self.auth_manager, token)
                 
@@ -157,41 +168,60 @@ class KiroHttpClient:
                 else:
                     response = await client.request(method, url, json=json_data, headers=headers)
                 
-                # Проверяем статус
+                # Check status
                 if response.status_code == 200:
                     return response
                 
-                # 403 - токен истёк, обновляем и повторяем
+                # 403 - token expired, refresh and retry
                 if response.status_code == 403:
                     logger.warning(f"Received 403, refreshing token (attempt {attempt + 1}/{MAX_RETRIES})")
                     await self.auth_manager.force_refresh()
                     continue
                 
-                # 429 - rate limit, ждём и повторяем
+                # 429 - rate limit, wait and retry
                 if response.status_code == 429:
                     delay = BASE_RETRY_DELAY * (2 ** attempt)
                     logger.warning(f"Received 429, waiting {delay}s (attempt {attempt + 1}/{MAX_RETRIES})")
                     await asyncio.sleep(delay)
                     continue
                 
-                # 5xx - серверная ошибка, ждём и повторяем
+                # 5xx - server error, wait and retry
                 if 500 <= response.status_code < 600:
                     delay = BASE_RETRY_DELAY * (2 ** attempt)
                     logger.warning(f"Received {response.status_code}, waiting {delay}s (attempt {attempt + 1}/{MAX_RETRIES})")
                     await asyncio.sleep(delay)
                     continue
                 
-                # Другие ошибки - возвращаем как есть
+                # Other errors - return as is
                 return response
                 
             except httpx.TimeoutException as e:
                 last_error = e
+                # Determine timeout type for logging
+                timeout_type = type(e).__name__
+                
                 if stream:
-                    # Для streaming - это first token timeout, retry без задержки
-                    logger.warning(f"First token timeout after {timeout}s (attempt {attempt + 1}/{max_retries})")
+                    # For streaming this could be:
+                    # - ConnectTimeout: TCP connection issue
+                    # - ReadTimeout: server not responding (STREAMING_READ_TIMEOUT)
+                    if isinstance(e, httpx.ConnectTimeout):
+                        logger.warning(
+                            f"[{timeout_type}] Connection timeout (attempt {attempt + 1}/{max_retries})"
+                        )
+                    elif isinstance(e, httpx.ReadTimeout):
+                        logger.warning(
+                            f"[{timeout_type}] Read timeout after {STREAMING_READ_TIMEOUT}s - "
+                            f"server stopped responding (attempt {attempt + 1}/{max_retries})"
+                        )
+                    else:
+                        logger.warning(
+                            f"[{timeout_type}] Timeout during streaming (attempt {attempt + 1}/{max_retries})"
+                        )
                 else:
                     delay = BASE_RETRY_DELAY * (2 ** attempt)
-                    logger.warning(f"Timeout, waiting {delay}s (attempt {attempt + 1}/{max_retries})")
+                    logger.warning(
+                        f"[{timeout_type}] Request timeout, waiting {delay}s (attempt {attempt + 1}/{max_retries})"
+                    )
                     await asyncio.sleep(delay)
                 
             except httpx.RequestError as e:
@@ -200,11 +230,11 @@ class KiroHttpClient:
                 logger.warning(f"Request error: {e}, waiting {delay}s (attempt {attempt + 1}/{max_retries})")
                 await asyncio.sleep(delay)
         
-        # Все попытки исчерпаны
+        # All attempts exhausted
         if stream:
             raise HTTPException(
                 status_code=504,
-                detail=f"Model did not respond within {timeout}s after {max_retries} attempts. Please try again."
+                detail=f"Streaming failed after {max_retries} attempts. Last error: {type(last_error).__name__}"
             )
         else:
             raise HTTPException(
@@ -213,9 +243,9 @@ class KiroHttpClient:
             )
     
     async def __aenter__(self) -> "KiroHttpClient":
-        """Поддержка async context manager."""
+        """Async context manager support."""
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Закрывает клиент при выходе из контекста."""
+        """Closes the client when exiting context."""
         await self.close()

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Unit-тесты для KiroHttpClient.
-Проверяет логику retry, обработку ошибок и управление HTTP клиентом.
+Unit tests for KiroHttpClient.
+Tests retry logic, error handling, and HTTP client management.
 """
 
 import asyncio
@@ -15,12 +15,12 @@ from fastapi import HTTPException
 
 from kiro_gateway.http_client import KiroHttpClient
 from kiro_gateway.auth import KiroAuthManager
-from kiro_gateway.config import MAX_RETRIES, BASE_RETRY_DELAY, FIRST_TOKEN_TIMEOUT, FIRST_TOKEN_MAX_RETRIES
+from kiro_gateway.config import MAX_RETRIES, BASE_RETRY_DELAY, FIRST_TOKEN_MAX_RETRIES, STREAMING_READ_TIMEOUT
 
 
 @pytest.fixture
 def mock_auth_manager_for_http():
-    """Создаёт мокированный KiroAuthManager для тестов HTTP клиента."""
+    """Creates a mocked KiroAuthManager for HTTP client tests."""
     manager = Mock(spec=KiroAuthManager)
     manager.get_access_token = AsyncMock(return_value="test_access_token")
     manager.force_refresh = AsyncMock(return_value="new_access_token")
@@ -30,44 +30,44 @@ def mock_auth_manager_for_http():
 
 
 class TestKiroHttpClientInitialization:
-    """Тесты инициализации KiroHttpClient."""
+    """Tests for KiroHttpClient initialization."""
     
     def test_initialization_stores_auth_manager(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет сохранение auth_manager при инициализации.
-        Цель: Убедиться, что auth_manager доступен для получения токенов.
+        What it does: Verifies auth_manager is stored during initialization.
+        Purpose: Ensure auth_manager is available for obtaining tokens.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         client = KiroHttpClient(mock_auth_manager_for_http)
         
-        print("Проверка: auth_manager сохранён...")
+        print("Verification: auth_manager is stored...")
         assert client.auth_manager is mock_auth_manager_for_http
     
     def test_initialization_client_is_none(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что HTTP клиент изначально None.
-        Цель: Убедиться в lazy initialization.
+        What it does: Verifies that HTTP client is initially None.
+        Purpose: Ensure lazy initialization.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         client = KiroHttpClient(mock_auth_manager_for_http)
         
-        print("Проверка: client изначально None...")
+        print("Verification: client is initially None...")
         assert client.client is None
 
 
 class TestKiroHttpClientGetClient:
-    """Тесты метода _get_client."""
+    """Tests for _get_client method."""
     
     @pytest.mark.asyncio
     async def test_get_client_creates_new_client(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет создание нового HTTP клиента.
-        Цель: Убедиться, что клиент создаётся при первом вызове.
+        What it does: Verifies creation of a new HTTP client.
+        Purpose: Ensure client is created on first call.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
-        print("Действие: Получение клиента...")
+        print("Action: Getting client...")
         with patch('kiro_gateway.http_client.httpx.AsyncClient') as mock_async_client:
             mock_instance = AsyncMock()
             mock_instance.is_closed = False
@@ -75,43 +75,43 @@ class TestKiroHttpClientGetClient:
             
             client = await http_client._get_client()
             
-            print("Проверка: Клиент создан...")
+            print("Verification: Client created...")
             mock_async_client.assert_called_once()
             assert client is mock_instance
     
     @pytest.mark.asyncio
     async def test_get_client_reuses_existing_client(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет повторное использование существующего клиента.
-        Цель: Убедиться, что клиент не создаётся заново.
+        What it does: Verifies reuse of existing client.
+        Purpose: Ensure client is not recreated unnecessarily.
         """
-        print("Настройка: Создание KiroHttpClient с существующим клиентом...")
+        print("Setup: Creating KiroHttpClient with existing client...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_existing = AsyncMock()
         mock_existing.is_closed = False
         http_client.client = mock_existing
         
-        print("Действие: Получение клиента...")
+        print("Action: Getting client...")
         client = await http_client._get_client()
         
-        print("Проверка: Возвращён существующий клиент...")
+        print("Verification: Existing client returned...")
         assert client is mock_existing
     
     @pytest.mark.asyncio
     async def test_get_client_recreates_closed_client(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет пересоздание закрытого клиента.
-        Цель: Убедиться, что закрытый клиент заменяется новым.
+        What it does: Verifies recreation of closed client.
+        Purpose: Ensure closed client is replaced with a new one.
         """
-        print("Настройка: Создание KiroHttpClient с закрытым клиентом...")
+        print("Setup: Creating KiroHttpClient with closed client...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_closed = AsyncMock()
         mock_closed.is_closed = True
         http_client.client = mock_closed
         
-        print("Действие: Получение клиента...")
+        print("Action: Getting client...")
         with patch('kiro_gateway.http_client.httpx.AsyncClient') as mock_async_client:
             mock_new = AsyncMock()
             mock_new.is_closed = False
@@ -119,21 +119,21 @@ class TestKiroHttpClientGetClient:
             
             client = await http_client._get_client()
             
-            print("Проверка: Создан новый клиент...")
+            print("Verification: New client created...")
             mock_async_client.assert_called_once()
             assert client is mock_new
 
 
 class TestKiroHttpClientClose:
-    """Тесты метода close."""
+    """Tests for close method."""
     
     @pytest.mark.asyncio
     async def test_close_closes_client(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет закрытие HTTP клиента.
-        Цель: Убедиться, что aclose() вызывается.
+        What it does: Verifies HTTP client closure.
+        Purpose: Ensure aclose() is called.
         """
-        print("Настройка: Создание KiroHttpClient с клиентом...")
+        print("Setup: Creating KiroHttpClient with client...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_client = AsyncMock()
@@ -141,56 +141,56 @@ class TestKiroHttpClientClose:
         mock_client.aclose = AsyncMock()
         http_client.client = mock_client
         
-        print("Действие: Закрытие клиента...")
+        print("Action: Closing client...")
         await http_client.close()
         
-        print("Проверка: aclose() вызван...")
+        print("Verification: aclose() called...")
         mock_client.aclose.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_close_does_nothing_for_none_client(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что close() не падает для None клиента.
-        Цель: Убедиться в безопасности вызова close() без клиента.
+        What it does: Verifies that close() doesn't fail for None client.
+        Purpose: Ensure safe close() call without client.
         """
-        print("Настройка: Создание KiroHttpClient без клиента...")
+        print("Setup: Creating KiroHttpClient without client...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
-        print("Действие: Закрытие клиента...")
-        await http_client.close()  # Не должно вызвать ошибку
+        print("Action: Closing client...")
+        await http_client.close()  # Should not raise an error
         
-        print("Проверка: Ошибок нет...")
+        print("Verification: No errors...")
     
     @pytest.mark.asyncio
     async def test_close_does_nothing_for_closed_client(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что close() не падает для закрытого клиента.
-        Цель: Убедиться в безопасности повторного вызова close().
+        What it does: Verifies that close() doesn't fail for closed client.
+        Purpose: Ensure safe repeated close() call.
         """
-        print("Настройка: Создание KiroHttpClient с закрытым клиентом...")
+        print("Setup: Creating KiroHttpClient with closed client...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_client = AsyncMock()
         mock_client.is_closed = True
         http_client.client = mock_client
         
-        print("Действие: Закрытие клиента...")
+        print("Action: Closing client...")
         await http_client.close()
         
-        print("Проверка: aclose() НЕ вызван...")
+        print("Verification: aclose() NOT called...")
         mock_client.aclose.assert_not_called()
 
 
 class TestKiroHttpClientRequestWithRetry:
-    """Тесты метода request_with_retry."""
+    """Tests for request_with_retry method."""
     
     @pytest.mark.asyncio
     async def test_successful_request_returns_response(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет успешный запрос.
-        Цель: Убедиться, что 200 ответ возвращается сразу.
+        What it does: Verifies successful request.
+        Purpose: Ensure 200 response is returned immediately.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response = AsyncMock()
@@ -200,7 +200,7 @@ class TestKiroHttpClientRequestWithRetry:
         mock_client.is_closed = False
         mock_client.request = AsyncMock(return_value=mock_response)
         
-        print("Действие: Выполнение запроса...")
+        print("Action: Executing request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 response = await http_client.request_with_retry(
@@ -209,17 +209,17 @@ class TestKiroHttpClientRequestWithRetry:
                     {"data": "value"}
                 )
         
-        print("Проверка: Ответ получен...")
+        print("Verification: Response received...")
         assert response.status_code == 200
         mock_client.request.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_403_triggers_token_refresh(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет обновление токена при 403.
-        Цель: Убедиться, что force_refresh() вызывается при 403.
+        What it does: Verifies token refresh on 403.
+        Purpose: Ensure force_refresh() is called on 403.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response_403 = AsyncMock()
@@ -232,7 +232,7 @@ class TestKiroHttpClientRequestWithRetry:
         mock_client.is_closed = False
         mock_client.request = AsyncMock(side_effect=[mock_response_403, mock_response_200])
         
-        print("Действие: Выполнение запроса...")
+        print("Action: Executing request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 response = await http_client.request_with_retry(
@@ -241,17 +241,17 @@ class TestKiroHttpClientRequestWithRetry:
                     {"data": "value"}
                 )
         
-        print("Проверка: force_refresh() вызван...")
+        print("Verification: force_refresh() called...")
         mock_auth_manager_for_http.force_refresh.assert_called_once()
         assert response.status_code == 200
     
     @pytest.mark.asyncio
     async def test_429_triggers_backoff(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет exponential backoff при 429.
-        Цель: Убедиться, что запрос повторяется после задержки.
+        What it does: Verifies exponential backoff on 429.
+        Purpose: Ensure request is retried after delay.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response_429 = AsyncMock()
@@ -264,7 +264,7 @@ class TestKiroHttpClientRequestWithRetry:
         mock_client.is_closed = False
         mock_client.request = AsyncMock(side_effect=[mock_response_429, mock_response_200])
         
-        print("Действие: Выполнение запроса...")
+        print("Action: Executing request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with patch('kiro_gateway.http_client.asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
@@ -274,17 +274,17 @@ class TestKiroHttpClientRequestWithRetry:
                         {"data": "value"}
                     )
         
-        print("Проверка: sleep() вызван для backoff...")
+        print("Verification: sleep() called for backoff...")
         mock_sleep.assert_called_once()
         assert response.status_code == 200
     
     @pytest.mark.asyncio
     async def test_5xx_triggers_backoff(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет exponential backoff при 5xx.
-        Цель: Убедиться, что серверные ошибки обрабатываются с retry.
+        What it does: Verifies exponential backoff on 5xx.
+        Purpose: Ensure server errors are handled with retry.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response_500 = AsyncMock()
@@ -297,7 +297,7 @@ class TestKiroHttpClientRequestWithRetry:
         mock_client.is_closed = False
         mock_client.request = AsyncMock(side_effect=[mock_response_500, mock_response_200])
         
-        print("Действие: Выполнение запроса...")
+        print("Action: Executing request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with patch('kiro_gateway.http_client.asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
@@ -307,17 +307,17 @@ class TestKiroHttpClientRequestWithRetry:
                         {"data": "value"}
                     )
         
-        print("Проверка: sleep() вызван для backoff...")
+        print("Verification: sleep() called for backoff...")
         mock_sleep.assert_called_once()
         assert response.status_code == 200
     
     @pytest.mark.asyncio
     async def test_timeout_triggers_backoff(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет exponential backoff при таймауте.
-        Цель: Убедиться, что таймауты обрабатываются с retry.
+        What it does: Verifies exponential backoff on timeout.
+        Purpose: Ensure timeouts are handled with retry.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response_200 = AsyncMock()
@@ -330,7 +330,7 @@ class TestKiroHttpClientRequestWithRetry:
             mock_response_200
         ])
         
-        print("Действие: Выполнение запроса...")
+        print("Action: Executing request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with patch('kiro_gateway.http_client.asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
@@ -340,17 +340,17 @@ class TestKiroHttpClientRequestWithRetry:
                         {"data": "value"}
                     )
         
-        print("Проверка: sleep() вызван для backoff...")
+        print("Verification: sleep() called for backoff...")
         mock_sleep.assert_called_once()
         assert response.status_code == 200
     
     @pytest.mark.asyncio
     async def test_request_error_triggers_backoff(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет exponential backoff при ошибке запроса.
-        Цель: Убедиться, что сетевые ошибки обрабатываются с retry.
+        What it does: Verifies exponential backoff on request error.
+        Purpose: Ensure network errors are handled with retry.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response_200 = AsyncMock()
@@ -363,7 +363,7 @@ class TestKiroHttpClientRequestWithRetry:
             mock_response_200
         ])
         
-        print("Действие: Выполнение запроса...")
+        print("Action: Executing request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with patch('kiro_gateway.http_client.asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
@@ -373,24 +373,24 @@ class TestKiroHttpClientRequestWithRetry:
                         {"data": "value"}
                     )
         
-        print("Проверка: sleep() вызван для backoff...")
+        print("Verification: sleep() called for backoff...")
         mock_sleep.assert_called_once()
         assert response.status_code == 200
     
     @pytest.mark.asyncio
     async def test_max_retries_exceeded_raises_502(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет выброс HTTPException после исчерпания попыток.
-        Цель: Убедиться, что после MAX_RETRIES выбрасывается 502.
+        What it does: Verifies HTTPException is raised after exhausting retries.
+        Purpose: Ensure 502 is raised after MAX_RETRIES.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_client = AsyncMock()
         mock_client.is_closed = False
         mock_client.request = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
         
-        print("Действие: Выполнение запроса...")
+        print("Action: Executing request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with patch('kiro_gateway.http_client.asyncio.sleep', new_callable=AsyncMock):
@@ -401,17 +401,17 @@ class TestKiroHttpClientRequestWithRetry:
                             {"data": "value"}
                         )
         
-        print(f"Проверка: HTTPException с кодом 502...")
+        print(f"Verification: HTTPException with code 502...")
         assert exc_info.value.status_code == 502
         assert str(MAX_RETRIES) in exc_info.value.detail
     
     @pytest.mark.asyncio
     async def test_other_status_codes_returned_as_is(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет возврат других статус-кодов без retry.
-        Цель: Убедиться, что 400, 404 и т.д. возвращаются сразу.
+        What it does: Verifies other status codes are returned without retry.
+        Purpose: Ensure 400, 404, etc. are returned immediately.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response = AsyncMock()
@@ -421,7 +421,7 @@ class TestKiroHttpClientRequestWithRetry:
         mock_client.is_closed = False
         mock_client.request = AsyncMock(return_value=mock_response)
         
-        print("Действие: Выполнение запроса...")
+        print("Action: Executing request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 response = await http_client.request_with_retry(
@@ -430,17 +430,17 @@ class TestKiroHttpClientRequestWithRetry:
                     {"data": "value"}
                 )
         
-        print("Проверка: Ответ 400 возвращён без retry...")
+        print("Verification: 400 response returned without retry...")
         assert response.status_code == 400
         mock_client.request.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_streaming_request_uses_send(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет использование send() для streaming.
-        Цель: Убедиться, что stream=True использует build_request + send.
+        What it does: Verifies send() is used for streaming.
+        Purpose: Ensure stream=True uses build_request + send.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response = AsyncMock()
@@ -453,7 +453,7 @@ class TestKiroHttpClientRequestWithRetry:
         mock_client.build_request = Mock(return_value=mock_request)
         mock_client.send = AsyncMock(return_value=mock_response)
         
-        print("Действие: Выполнение streaming запроса...")
+        print("Action: Executing streaming request...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 response = await http_client.request_with_retry(
@@ -463,37 +463,37 @@ class TestKiroHttpClientRequestWithRetry:
                     stream=True
                 )
         
-        print("Проверка: build_request и send вызваны...")
+        print("Verification: build_request and send called...")
         mock_client.build_request.assert_called_once()
         mock_client.send.assert_called_once_with(mock_request, stream=True)
         assert response.status_code == 200
 
 
 class TestKiroHttpClientContextManager:
-    """Тесты async context manager."""
+    """Tests for async context manager."""
     
     @pytest.mark.asyncio
     async def test_context_manager_returns_self(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что __aenter__ возвращает self.
-        Цель: Убедиться в корректной работе async with.
+        What it does: Verifies that __aenter__ returns self.
+        Purpose: Ensure correct async with behavior.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
-        print("Действие: Вход в контекст...")
+        print("Action: Entering context...")
         result = await http_client.__aenter__()
         
-        print("Проверка: Возвращён self...")
+        print("Verification: self returned...")
         assert result is http_client
     
     @pytest.mark.asyncio
     async def test_context_manager_closes_on_exit(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет закрытие клиента при выходе из контекста.
-        Цель: Убедиться, что close() вызывается в __aexit__.
+        What it does: Verifies client closure on context exit.
+        Purpose: Ensure close() is called in __aexit__.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_client = AsyncMock()
@@ -501,23 +501,23 @@ class TestKiroHttpClientContextManager:
         mock_client.aclose = AsyncMock()
         http_client.client = mock_client
         
-        print("Действие: Выход из контекста...")
+        print("Action: Exiting context...")
         await http_client.__aexit__(None, None, None)
         
-        print("Проверка: aclose() вызван...")
+        print("Verification: aclose() called...")
         mock_client.aclose.assert_called_once()
 
 
 class TestKiroHttpClientExponentialBackoff:
-    """Тесты exponential backoff логики."""
+    """Tests for exponential backoff logic."""
     
     @pytest.mark.asyncio
     async def test_backoff_delay_increases_exponentially(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет экспоненциальное увеличение задержки.
-        Цель: Убедиться, что delay = BASE_RETRY_DELAY * (2 ** attempt).
+        What it does: Verifies exponential delay increase.
+        Purpose: Ensure delay = BASE_RETRY_DELAY * (2 ** attempt).
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response_429 = AsyncMock()
@@ -528,7 +528,7 @@ class TestKiroHttpClientExponentialBackoff:
         
         mock_client = AsyncMock()
         mock_client.is_closed = False
-        # 3 ошибки 429, затем успех
+        # 2 errors 429, then success (to verify 2 backoff delays)
         mock_client.request = AsyncMock(side_effect=[
             mock_response_429,
             mock_response_429,
@@ -540,7 +540,7 @@ class TestKiroHttpClientExponentialBackoff:
         async def capture_sleep(delay):
             sleep_delays.append(delay)
         
-        print("Действие: Выполнение запроса с несколькими retry...")
+        print("Action: Executing request with multiple retries...")
         with patch.object(http_client, '_get_client', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with patch('kiro_gateway.http_client.asyncio.sleep', side_effect=capture_sleep):
@@ -550,23 +550,23 @@ class TestKiroHttpClientExponentialBackoff:
                         {"data": "value"}
                     )
         
-        print(f"Проверка: Задержки увеличиваются экспоненциально...")
-        print(f"Задержки: {sleep_delays}")
+        print(f"Verification: Delays increase exponentially...")
+        print(f"Delays: {sleep_delays}")
         assert len(sleep_delays) == 2
         assert sleep_delays[0] == BASE_RETRY_DELAY * (2 ** 0)  # 1.0
         assert sleep_delays[1] == BASE_RETRY_DELAY * (2 ** 1)  # 2.0
 
 
-class TestKiroHttpClientFirstTokenTimeout:
-    """Тесты логики first token timeout для streaming запросов."""
+class TestKiroHttpClientStreamingTimeout:
+    """Tests for streaming request timeout logic."""
     
     @pytest.mark.asyncio
-    async def test_streaming_uses_first_token_timeout(self, mock_auth_manager_for_http):
+    async def test_streaming_uses_streaming_read_timeout(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что streaming запросы используют FIRST_TOKEN_TIMEOUT.
-        Цель: Убедиться, что для stream=True используется короткий таймаут.
+        What it does: Verifies that streaming requests use STREAMING_READ_TIMEOUT.
+        Purpose: Ensure stream=True uses httpx.Timeout with correct values.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response = AsyncMock()
@@ -579,7 +579,7 @@ class TestKiroHttpClientFirstTokenTimeout:
         mock_client.build_request = Mock(return_value=mock_request)
         mock_client.send = AsyncMock(return_value=mock_response)
         
-        print("Действие: Выполнение streaming запроса...")
+        print("Action: Executing streaming request...")
         with patch('kiro_gateway.http_client.httpx.AsyncClient') as mock_async_client:
             mock_async_client.return_value = mock_client
             
@@ -591,22 +591,24 @@ class TestKiroHttpClientFirstTokenTimeout:
                     stream=True
                 )
         
-        print("Проверка: AsyncClient создан с httpx.Timeout для streaming...")
-        # For streaming, we use httpx.Timeout with connect=FIRST_TOKEN_TIMEOUT and read=STREAMING_READ_TIMEOUT
+        print("Verification: AsyncClient created with httpx.Timeout for streaming...")
         call_args = mock_async_client.call_args
         timeout_arg = call_args.kwargs.get('timeout')
         assert timeout_arg is not None, f"timeout not found in call_args: {call_args}"
-        assert timeout_arg.connect == FIRST_TOKEN_TIMEOUT
+        print(f"Comparing connect: Expected 30.0, Got {timeout_arg.connect}")
+        assert timeout_arg.connect == 30.0, f"Expected connect=30.0, got {timeout_arg.connect}"
+        print(f"Comparing read: Expected {STREAMING_READ_TIMEOUT}, Got {timeout_arg.read}")
+        assert timeout_arg.read == STREAMING_READ_TIMEOUT, f"Expected read={STREAMING_READ_TIMEOUT}, got {timeout_arg.read}"
         assert call_args.kwargs.get('follow_redirects') == True
         assert response.status_code == 200
     
     @pytest.mark.asyncio
     async def test_streaming_uses_first_token_max_retries(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что streaming запросы используют FIRST_TOKEN_MAX_RETRIES.
-        Цель: Убедиться, что для stream=True используется отдельный счётчик retry.
+        What it does: Verifies that streaming requests use FIRST_TOKEN_MAX_RETRIES.
+        Purpose: Ensure stream=True uses separate retry counter.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_request = Mock()
@@ -616,7 +618,7 @@ class TestKiroHttpClientFirstTokenTimeout:
         mock_client.build_request = Mock(return_value=mock_request)
         mock_client.send = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
         
-        print("Действие: Выполнение streaming запроса с таймаутами...")
+        print("Action: Executing streaming request with timeouts...")
         with patch('kiro_gateway.http_client.httpx.AsyncClient', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with pytest.raises(HTTPException) as exc_info:
@@ -627,20 +629,20 @@ class TestKiroHttpClientFirstTokenTimeout:
                         stream=True
                     )
         
-        print(f"Проверка: HTTPException с кодом 504...")
+        print(f"Verification: HTTPException with code 504...")
         assert exc_info.value.status_code == 504
         assert str(FIRST_TOKEN_MAX_RETRIES) in exc_info.value.detail
         
-        print(f"Проверка: Количество попыток = FIRST_TOKEN_MAX_RETRIES ({FIRST_TOKEN_MAX_RETRIES})...")
+        print(f"Verification: Attempt count = FIRST_TOKEN_MAX_RETRIES ({FIRST_TOKEN_MAX_RETRIES})...")
         assert mock_client.send.call_count == FIRST_TOKEN_MAX_RETRIES
     
     @pytest.mark.asyncio
     async def test_streaming_timeout_retry_without_delay(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что streaming таймаут retry происходит без задержки.
-        Цель: Убедиться, что при first token timeout нет exponential backoff.
+        What it does: Verifies that streaming timeout retry happens without delay.
+        Purpose: Ensure no exponential backoff on first token timeout.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response = AsyncMock()
@@ -651,7 +653,7 @@ class TestKiroHttpClientFirstTokenTimeout:
         mock_client = AsyncMock()
         mock_client.is_closed = False
         mock_client.build_request = Mock(return_value=mock_request)
-        # Первый таймаут, затем успех
+        # First timeout, then success
         mock_client.send = AsyncMock(side_effect=[
             httpx.TimeoutException("Timeout"),
             mock_response
@@ -663,7 +665,7 @@ class TestKiroHttpClientFirstTokenTimeout:
             nonlocal sleep_called
             sleep_called = True
         
-        print("Действие: Выполнение streaming запроса с одним таймаутом...")
+        print("Action: Executing streaming request with one timeout...")
         with patch('kiro_gateway.http_client.httpx.AsyncClient', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with patch('kiro_gateway.http_client.asyncio.sleep', side_effect=capture_sleep):
@@ -674,17 +676,17 @@ class TestKiroHttpClientFirstTokenTimeout:
                         stream=True
                     )
         
-        print("Проверка: sleep() НЕ вызван для streaming таймаута...")
+        print("Verification: sleep() NOT called for streaming timeout...")
         assert not sleep_called
         assert response.status_code == 200
-    
+        
     @pytest.mark.asyncio
     async def test_non_streaming_uses_default_timeout(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что non-streaming запросы используют 300 секунд.
-        Цель: Убедиться, что для stream=False используется длинный таймаут.
+        What it does: Verifies that non-streaming requests use 300 seconds.
+        Purpose: Ensure stream=False uses unified httpx.Timeout.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response = AsyncMock()
@@ -694,7 +696,7 @@ class TestKiroHttpClientFirstTokenTimeout:
         mock_client.is_closed = False
         mock_client.request = AsyncMock(return_value=mock_response)
         
-        print("Действие: Выполнение non-streaming запроса...")
+        print("Action: Executing non-streaming request...")
         with patch('kiro_gateway.http_client.httpx.AsyncClient') as mock_async_client:
             mock_async_client.return_value = mock_client
             
@@ -706,17 +708,23 @@ class TestKiroHttpClientFirstTokenTimeout:
                     stream=False
                 )
         
-        print("Проверка: AsyncClient создан с таймаутом 300...")
-        mock_async_client.assert_called_with(timeout=300, follow_redirects=True)
+        print("Verification: AsyncClient created with httpx.Timeout(timeout=300)...")
+        call_args = mock_async_client.call_args
+        timeout_arg = call_args.kwargs.get('timeout')
+        assert timeout_arg is not None, f"timeout not found in call_args: {call_args}"
+        # httpx.Timeout(timeout=300) sets all timeouts to 300
+        print(f"Comparing timeout: Expected 300.0 for all, Got connect={timeout_arg.connect}")
+        assert timeout_arg.connect == 300.0
+        assert timeout_arg.read == 300.0
         assert response.status_code == 200
     
     @pytest.mark.asyncio
-    async def test_custom_first_token_timeout(self, mock_auth_manager_for_http):
+    async def test_connect_timeout_logged_correctly(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет использование кастомного first_token_timeout.
-        Цель: Убедиться, что параметр first_token_timeout переопределяет дефолт.
+        What it does: Verifies ConnectTimeout logging.
+        Purpose: Ensure ConnectTimeout is logged with correct type.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_response = AsyncMock()
@@ -727,39 +735,75 @@ class TestKiroHttpClientFirstTokenTimeout:
         mock_client = AsyncMock()
         mock_client.is_closed = False
         mock_client.build_request = Mock(return_value=mock_request)
-        mock_client.send = AsyncMock(return_value=mock_response)
+        # First ConnectTimeout, then success
+        mock_client.send = AsyncMock(side_effect=[
+            httpx.ConnectTimeout("Connection timeout"),
+            mock_response
+        ])
         
-        custom_timeout = 5.0
-        
-        print(f"Действие: Выполнение streaming запроса с custom timeout={custom_timeout}...")
-        with patch('kiro_gateway.http_client.httpx.AsyncClient') as mock_async_client:
-            mock_async_client.return_value = mock_client
-            
+        print("Action: Executing streaming request with ConnectTimeout...")
+        with patch('kiro_gateway.http_client.httpx.AsyncClient', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
-                response = await http_client.request_with_retry(
-                    "POST",
-                    "https://api.example.com/test",
-                    {"data": "value"},
-                    stream=True,
-                    first_token_timeout=custom_timeout
-                )
+                with patch('kiro_gateway.http_client.logger') as mock_logger:
+                    response = await http_client.request_with_retry(
+                        "POST",
+                        "https://api.example.com/test",
+                        {"data": "value"},
+                        stream=True
+                    )
         
-        print(f"Проверка: AsyncClient создан с httpx.Timeout для streaming с custom connect timeout...")
-        # For streaming, we use httpx.Timeout with connect=custom_timeout and read=STREAMING_READ_TIMEOUT
-        call_args = mock_async_client.call_args
-        timeout_arg = call_args.kwargs.get('timeout')
-        assert timeout_arg is not None, f"timeout not found in call_args: {call_args}"
-        assert timeout_arg.connect == custom_timeout
-        assert call_args.kwargs.get('follow_redirects') == True
+        print("Verification: logger.warning called with [ConnectTimeout]...")
+        warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+        assert any("ConnectTimeout" in call for call in warning_calls), f"ConnectTimeout not found in: {warning_calls}"
         assert response.status_code == 200
     
     @pytest.mark.asyncio
-    async def test_streaming_timeout_returns_504(self, mock_auth_manager_for_http):
+    async def test_read_timeout_logged_correctly(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что streaming таймаут возвращает 504.
-        Цель: Убедиться, что после исчерпания попыток возвращается 504 Gateway Timeout.
+        What it does: Verifies ReadTimeout logging.
+        Purpose: Ensure ReadTimeout is logged with STREAMING_READ_TIMEOUT.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
+        http_client = KiroHttpClient(mock_auth_manager_for_http)
+        
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        
+        mock_request = Mock()
+        
+        mock_client = AsyncMock()
+        mock_client.is_closed = False
+        mock_client.build_request = Mock(return_value=mock_request)
+        # First ReadTimeout, then success
+        mock_client.send = AsyncMock(side_effect=[
+            httpx.ReadTimeout("Read timeout"),
+            mock_response
+        ])
+        
+        print("Action: Executing streaming request with ReadTimeout...")
+        with patch('kiro_gateway.http_client.httpx.AsyncClient', return_value=mock_client):
+            with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
+                with patch('kiro_gateway.http_client.logger') as mock_logger:
+                    response = await http_client.request_with_retry(
+                        "POST",
+                        "https://api.example.com/test",
+                        {"data": "value"},
+                        stream=True
+                    )
+        
+        print("Verification: logger.warning called with [ReadTimeout] and STREAMING_READ_TIMEOUT...")
+        warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+        assert any("ReadTimeout" in call for call in warning_calls), f"ReadTimeout not found in: {warning_calls}"
+        assert any(str(STREAMING_READ_TIMEOUT) in call for call in warning_calls), f"STREAMING_READ_TIMEOUT not found in: {warning_calls}"
+        assert response.status_code == 200
+    
+    @pytest.mark.asyncio
+    async def test_streaming_timeout_returns_504_with_error_type(self, mock_auth_manager_for_http):
+        """
+        What it does: Verifies that streaming timeout returns 504 with error type.
+        Purpose: Ensure 504 is returned with error info after exhausting retries.
+        """
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_request = Mock()
@@ -767,9 +811,9 @@ class TestKiroHttpClientFirstTokenTimeout:
         mock_client = AsyncMock()
         mock_client.is_closed = False
         mock_client.build_request = Mock(return_value=mock_request)
-        mock_client.send = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+        mock_client.send = AsyncMock(side_effect=httpx.ReadTimeout("Timeout"))
         
-        print("Действие: Выполнение streaming запроса с постоянными таймаутами...")
+        print("Action: Executing streaming request with persistent timeouts...")
         with patch('kiro_gateway.http_client.httpx.AsyncClient', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with pytest.raises(HTTPException) as exc_info:
@@ -780,25 +824,27 @@ class TestKiroHttpClientFirstTokenTimeout:
                         stream=True
                     )
         
-        print("Проверка: HTTPException с кодом 504 и сообщением о таймауте...")
+        print("Verification: HTTPException with code 504 and error type...")
+        print(f"Comparing status_code: Expected 504, Got {exc_info.value.status_code}")
         assert exc_info.value.status_code == 504
-        assert "did not respond" in exc_info.value.detail
-        assert "Please try again" in exc_info.value.detail
+        print(f"Comparing detail: Expected 'ReadTimeout' in '{exc_info.value.detail}'")
+        assert "ReadTimeout" in exc_info.value.detail
+        assert "Streaming failed" in exc_info.value.detail
     
     @pytest.mark.asyncio
     async def test_non_streaming_timeout_returns_502(self, mock_auth_manager_for_http):
         """
-        Что он делает: Проверяет, что non-streaming таймаут возвращает 502.
-        Цель: Убедиться, что для non-streaming используется старая логика с 502.
+        What it does: Verifies that non-streaming timeout returns 502.
+        Purpose: Ensure non-streaming uses legacy logic with 502.
         """
-        print("Настройка: Создание KiroHttpClient...")
+        print("Setup: Creating KiroHttpClient...")
         http_client = KiroHttpClient(mock_auth_manager_for_http)
         
         mock_client = AsyncMock()
         mock_client.is_closed = False
         mock_client.request = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
         
-        print("Действие: Выполнение non-streaming запроса с постоянными таймаутами...")
+        print("Action: Executing non-streaming request with persistent timeouts...")
         with patch('kiro_gateway.http_client.httpx.AsyncClient', return_value=mock_client):
             with patch('kiro_gateway.http_client.get_kiro_headers', return_value={}):
                 with patch('kiro_gateway.http_client.asyncio.sleep', new_callable=AsyncMock):
@@ -810,5 +856,5 @@ class TestKiroHttpClientFirstTokenTimeout:
                             stream=False
                         )
         
-        print("Проверка: HTTPException с кодом 502...")
+        print("Verification: HTTPException with code 502...")
         assert exc_info.value.status_code == 502

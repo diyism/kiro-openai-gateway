@@ -114,14 +114,18 @@ async def stream_kiro_to_openai_internal(
         # Create iterator for reading bytes
         byte_iterator = response.aiter_bytes()
         
-        # Wait for first chunk with timeout
+        # Wait for first chunk with timeout (FIRST_TOKEN_TIMEOUT)
+        # This is our business logic for detecting "stuck" requests
+        # where the model takes too long to start responding
         try:
+            logger.debug(f"Waiting for first token (timeout={first_token_timeout}s)...")
             first_byte_chunk = await asyncio.wait_for(
                 byte_iterator.__anext__(),
                 timeout=first_token_timeout
             )
+            logger.debug("First token received")
         except asyncio.TimeoutError:
-            logger.warning(f"First token timeout after {first_token_timeout}s")
+            logger.warning(f"[FirstTokenTimeout] Model did not respond within {first_token_timeout}s")
             raise FirstTokenTimeoutError(f"No response within {first_token_timeout} seconds")
         except StopAsyncIteration:
             # Empty response - this is normal, just finish
@@ -473,7 +477,10 @@ async def stream_with_first_token_retry(
             
         except FirstTokenTimeoutError as e:
             last_error = e
-            logger.warning(f"First token timeout on attempt {attempt + 1}/{max_retries}")
+            logger.warning(
+                f"[FirstTokenTimeout] Attempt {attempt + 1}/{max_retries} failed - "
+                f"model did not respond within {first_token_timeout}s"
+            )
             
             # Close current response if open
             if response:
@@ -496,7 +503,10 @@ async def stream_with_first_token_retry(
             raise
     
     # All attempts exhausted - raise HTTP error
-    logger.error(f"All {max_retries} attempts failed due to first token timeout")
+    logger.error(
+        f"[FirstTokenTimeout] All {max_retries} attempts exhausted - "
+        f"model never responded within {first_token_timeout}s per attempt"
+    )
     raise HTTPException(
         status_code=504,
         detail=f"Model did not respond within {first_token_timeout}s after {max_retries} attempts. Please try again."
