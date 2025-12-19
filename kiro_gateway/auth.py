@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Kiro OpenAI Gateway
+# https://github.com/jwadow/kiro-openai-gateway
 # Copyright (C) 2025 Jwadow
 #
 # This program is free software: you can redistribute it and/or modify
@@ -17,12 +18,12 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
-Менеджер аутентификации для Kiro API.
+Authentication manager for Kiro API.
 
-Управляет жизненным циклом токенов доступа:
-- Загрузка credentials из .env или JSON файла
-- Автоматическое обновление токена при истечении
-- Потокобезопасное обновление с использованием asyncio.Lock
+Manages the lifecycle of access tokens:
+- Loading credentials from .env or JSON file
+- Automatic token refresh on expiration
+- Thread-safe refresh using asyncio.Lock
 """
 
 import asyncio
@@ -45,20 +46,20 @@ from kiro_gateway.utils import get_machine_fingerprint
 
 class KiroAuthManager:
     """
-    Управляет жизненным циклом токена для доступа к Kiro API.
+    Manages the token lifecycle for accessing Kiro API.
     
-    Поддерживает:
-    - Загрузку credentials из .env или JSON файла
-    - Автоматическое обновление токена при истечении
-    - Проверку времени истечения (expiresAt)
-    - Сохранение обновлённых токенов в файл
+    Supports:
+    - Loading credentials from .env or JSON file
+    - Automatic token refresh on expiration
+    - Expiration time validation (expiresAt)
+    - Saving updated tokens to file
     
     Attributes:
-        profile_arn: ARN профиля AWS CodeWhisperer
-        region: Регион AWS
-        api_host: Хост API для текущего региона
-        q_host: Хост Q API для текущего региона
-        fingerprint: Уникальный fingerprint машины
+        profile_arn: AWS CodeWhisperer profile ARN
+        region: AWS region
+        api_host: API host for the current region
+        q_host: Q API host for the current region
+        fingerprint: Unique machine fingerprint
     
     Example:
         >>> auth_manager = KiroAuthManager(
@@ -76,13 +77,13 @@ class KiroAuthManager:
         creds_file: Optional[str] = None
     ):
         """
-        Инициализирует менеджер аутентификации.
+        Initializes the authentication manager.
         
         Args:
-            refresh_token: Refresh token для обновления access token
-            profile_arn: ARN профиля AWS CodeWhisperer
-            region: Регион AWS (по умолчанию us-east-1)
-            creds_file: Путь к JSON файлу с credentials (опционально)
+            refresh_token: Refresh token for obtaining access token
+            profile_arn: AWS CodeWhisperer profile ARN
+            region: AWS region (default: us-east-1)
+            creds_file: Path to JSON file with credentials (optional)
         """
         self._refresh_token = refresh_token
         self._profile_arn = profile_arn
@@ -93,31 +94,31 @@ class KiroAuthManager:
         self._expires_at: Optional[datetime] = None
         self._lock = asyncio.Lock()
         
-        # Динамические URL на основе региона
+        # Dynamic URLs based on region
         self._refresh_url = get_kiro_refresh_url(region)
         self._api_host = get_kiro_api_host(region)
         self._q_host = get_kiro_q_host(region)
         
-        # Fingerprint для User-Agent
+        # Fingerprint for User-Agent
         self._fingerprint = get_machine_fingerprint()
         
-        # Загружаем credentials из файла если указан
+        # Load credentials from file if specified
         if creds_file:
             self._load_credentials_from_file(creds_file)
     
     def _load_credentials_from_file(self, file_path: str) -> None:
         """
-        Загружает credentials из JSON файла.
+        Loads credentials from a JSON file.
         
-        Поддерживаемые поля в JSON:
+        Supported JSON fields:
         - refreshToken: Refresh token
-        - accessToken: Access token (если уже есть)
-        - profileArn: ARN профиля
-        - region: Регион AWS
-        - expiresAt: Время истечения токена (ISO 8601)
+        - accessToken: Access token (if already available)
+        - profileArn: Profile ARN
+        - region: AWS region
+        - expiresAt: Token expiration time (ISO 8601)
         
         Args:
-            file_path: Путь к JSON файлу
+            file_path: Path to JSON file
         """
         try:
             path = Path(file_path).expanduser()
@@ -128,7 +129,7 @@ class KiroAuthManager:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # Загружаем данные из файла
+            # Load data from file
             if 'refreshToken' in data:
                 self._refresh_token = data['refreshToken']
             if 'accessToken' in data:
@@ -137,16 +138,16 @@ class KiroAuthManager:
                 self._profile_arn = data['profileArn']
             if 'region' in data:
                 self._region = data['region']
-                # Обновляем URL для нового региона
+                # Update URLs for new region
                 self._refresh_url = get_kiro_refresh_url(self._region)
                 self._api_host = get_kiro_api_host(self._region)
                 self._q_host = get_kiro_q_host(self._region)
             
-            # Парсим expiresAt
+            # Parse expiresAt
             if 'expiresAt' in data:
                 try:
                     expires_str = data['expiresAt']
-                    # Поддержка разных форматов даты
+                    # Support for different date formats
                     if expires_str.endswith('Z'):
                         self._expires_at = datetime.fromisoformat(expires_str.replace('Z', '+00:00'))
                     else:
@@ -161,9 +162,9 @@ class KiroAuthManager:
     
     def _save_credentials_to_file(self) -> None:
         """
-        Сохраняет обновлённые credentials в JSON файл.
+        Saves updated credentials to a JSON file.
         
-        Обновляет существующий файл, сохраняя другие поля.
+        Updates the existing file while preserving other fields.
         """
         if not self._creds_file:
             return
@@ -171,13 +172,13 @@ class KiroAuthManager:
         try:
             path = Path(self._creds_file).expanduser()
             
-            # Читаем существующие данные
+            # Read existing data
             existing_data = {}
             if path.exists():
                 with open(path, 'r', encoding='utf-8') as f:
                     existing_data = json.load(f)
             
-            # Обновляем данные
+            # Update data
             existing_data['accessToken'] = self._access_token
             existing_data['refreshToken'] = self._refresh_token
             if self._expires_at:
@@ -185,7 +186,7 @@ class KiroAuthManager:
             if self._profile_arn:
                 existing_data['profileArn'] = self._profile_arn
             
-            # Сохраняем
+            # Save
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(existing_data, f, indent=2, ensure_ascii=False)
             
@@ -196,14 +197,14 @@ class KiroAuthManager:
     
     def is_token_expiring_soon(self) -> bool:
         """
-        Проверяет, истекает ли токен в ближайшее время.
+        Checks if the token is expiring soon.
         
         Returns:
-            True если токен истекает в течение TOKEN_REFRESH_THRESHOLD секунд
-            или если информация о времени истечения отсутствует
+            True if the token expires within TOKEN_REFRESH_THRESHOLD seconds
+            or if expiration time information is not available
         """
         if not self._expires_at:
-            return True  # Если нет информации о времени истечения, считаем что нужно обновить
+            return True  # If no expiration info available, assume refresh is needed
         
         now = datetime.now(timezone.utc)
         threshold = now.timestamp() + TOKEN_REFRESH_THRESHOLD
@@ -212,14 +213,14 @@ class KiroAuthManager:
     
     async def _refresh_token_request(self) -> None:
         """
-        Выполняет запрос на обновление токена.
+        Performs a token refresh request.
         
-        Отправляет POST запрос к Kiro API для получения нового access token.
-        Обновляет внутреннее состояние и сохраняет credentials в файл.
+        Sends a POST request to Kiro API to obtain a new access token.
+        Updates internal state and saves credentials to file.
         
         Raises:
-            ValueError: Если refresh token не установлен или ответ не содержит accessToken
-            httpx.HTTPError: При ошибке HTTP запроса
+            ValueError: If refresh token is not set or response doesn't contain accessToken
+            httpx.HTTPError: On HTTP request error
         """
         if not self._refresh_token:
             raise ValueError("Refresh token is not set")
@@ -229,7 +230,7 @@ class KiroAuthManager:
         payload = {'refreshToken': self._refresh_token}
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": f"KiroGateway-{self._fingerprint[:16]}",
+            "User-Agent": f"KiroIDE-0.7.45-{self._fingerprint}",
         }
         
         async with httpx.AsyncClient(timeout=30) as client:
@@ -245,14 +246,14 @@ class KiroAuthManager:
         if not new_access_token:
             raise ValueError(f"Response does not contain accessToken: {data}")
         
-        # Обновляем данные
+        # Update data
         self._access_token = new_access_token
         if new_refresh_token:
             self._refresh_token = new_refresh_token
         if new_profile_arn:
             self._profile_arn = new_profile_arn
         
-        # Вычисляем время истечения с запасом (минус 60 секунд)
+        # Calculate expiration time with buffer (minus 60 seconds)
         self._expires_at = datetime.now(timezone.utc).replace(microsecond=0)
         self._expires_at = datetime.fromtimestamp(
             self._expires_at.timestamp() + expires_in - 60,
@@ -261,21 +262,21 @@ class KiroAuthManager:
         
         logger.info(f"Token refreshed, expires: {self._expires_at.isoformat()}")
         
-        # Сохраняем в файл
+        # Save to file
         self._save_credentials_to_file()
     
     async def get_access_token(self) -> str:
         """
-        Возвращает действительный access_token, обновляя его при необходимости.
+        Returns a valid access_token, refreshing it if necessary.
         
-        Потокобезопасный метод с использованием asyncio.Lock.
-        Автоматически обновляет токен если он истёк или скоро истечёт.
+        Thread-safe method using asyncio.Lock.
+        Automatically refreshes the token if it has expired or is about to expire.
         
         Returns:
-            Действительный access token
+            Valid access token
         
         Raises:
-            ValueError: Если не удалось получить access token
+            ValueError: If unable to obtain access token
         """
         async with self._lock:
             if not self._access_token or self.is_token_expiring_soon():
@@ -288,12 +289,12 @@ class KiroAuthManager:
     
     async def force_refresh(self) -> str:
         """
-        Принудительно обновляет токен.
+        Forces a token refresh.
         
-        Используется при получении 403 ошибки от API.
+        Used when receiving a 403 error from the API.
         
         Returns:
-            Новый access token
+            New access token
         """
         async with self._lock:
             await self._refresh_token_request()
@@ -301,25 +302,25 @@ class KiroAuthManager:
     
     @property
     def profile_arn(self) -> Optional[str]:
-        """ARN профиля AWS CodeWhisperer."""
+        """AWS CodeWhisperer profile ARN."""
         return self._profile_arn
     
     @property
     def region(self) -> str:
-        """Регион AWS."""
+        """AWS region."""
         return self._region
     
     @property
     def api_host(self) -> str:
-        """Хост API для текущего региона."""
+        """API host for the current region."""
         return self._api_host
     
     @property
     def q_host(self) -> str:
-        """Хост Q API для текущего региона."""
+        """Q API host for the current region."""
         return self._q_host
     
     @property
     def fingerprint(self) -> str:
-        """Уникальный fingerprint машины."""
+        """Unique machine fingerprint."""
         return self._fingerprint

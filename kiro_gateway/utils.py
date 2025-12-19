@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Kiro OpenAI Gateway
+# https://github.com/jwadow/kiro-openai-gateway
 # Copyright (C) 2025 Jwadow
 #
 # This program is free software: you can redistribute it and/or modify
@@ -17,10 +18,10 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
-Вспомогательные утилиты для Kiro Gateway.
+Utility functions for Kiro Gateway.
 
-Содержит функции для генерации fingerprint, формирования заголовков
-и другие общие утилиты.
+Contains functions for fingerprint generation, header formatting,
+and other common utilities.
 """
 
 import hashlib
@@ -35,13 +36,12 @@ if TYPE_CHECKING:
 
 def get_machine_fingerprint() -> str:
     """
-    Генерирует уникальный fingerprint машины на основе hostname и username.
+    Generates a unique machine fingerprint based on hostname and username.
     
-    Используется для формирования User-Agent, чтобы идентифицировать
-    конкретную установку gateway.
+    Used for User-Agent formation to identify a specific gateway installation.
     
     Returns:
-        SHA256 хеш строки "{hostname}-{username}-kiro-gateway"
+        SHA256 hash of the string "{hostname}-{username}-kiro-gateway"
     """
     try:
         import socket
@@ -59,27 +59,27 @@ def get_machine_fingerprint() -> str:
 
 def get_kiro_headers(auth_manager: "KiroAuthManager", token: str) -> dict:
     """
-    Формирует заголовки для запросов к Kiro API.
+    Builds headers for Kiro API requests.
     
-    Включает все необходимые заголовки для аутентификации и идентификации:
-    - Authorization с Bearer токеном
-    - User-Agent с fingerprint
-    - Специфичные для AWS CodeWhisperer заголовки
+    Includes all necessary headers for authentication and identification:
+    - Authorization with Bearer token
+    - User-Agent with fingerprint
+    - AWS CodeWhisperer specific headers
     
     Args:
-        auth_manager: Менеджер аутентификации для получения fingerprint
-        token: Access token для авторизации
+        auth_manager: Authentication manager for obtaining fingerprint
+        token: Access token for authorization
     
     Returns:
-        Словарь с заголовками для HTTP запроса
+        Dictionary with headers for HTTP request
     """
     fingerprint = auth_manager.fingerprint
     
     return {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
-        "User-Agent": f"aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroGateway-{fingerprint[:32]}",
-        "x-amz-user-agent": f"aws-sdk-js/1.0.27 KiroGateway-{fingerprint[:32]}",
+        "User-Agent": f"aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-0.7.45-{fingerprint}",
+        "x-amz-user-agent": f"aws-sdk-js/1.0.27 KiroIDE-0.7.45-{fingerprint}",
         "x-amzn-codewhisperer-optout": "true",
         "x-amzn-kiro-agent-mode": "vibe",
         "amz-sdk-invocation-id": str(uuid.uuid4()),
@@ -89,29 +89,29 @@ def get_kiro_headers(auth_manager: "KiroAuthManager", token: str) -> dict:
 
 def generate_completion_id() -> str:
     """
-    Генерирует уникальный ID для chat completion.
+    Generates a unique ID for chat completion.
     
     Returns:
-        ID в формате "chatcmpl-{uuid_hex}"
+        ID in format "chatcmpl-{uuid_hex}"
     """
     return f"chatcmpl-{uuid.uuid4().hex}"
 
 
 def generate_conversation_id() -> str:
     """
-    Генерирует уникальный ID для разговора.
+    Generates a unique ID for conversation.
     
     Returns:
-        UUID в строковом формате
+        UUID in string format
     """
     return str(uuid.uuid4())
 
 
 def generate_tool_call_id() -> str:
     """
-    Генерирует уникальный ID для tool call.
+    Generates a unique ID for tool call.
     
     Returns:
-        ID в формате "call_{uuid_hex[:8]}"
+        ID in format "call_{uuid_hex[:8]}"
     """
     return f"call_{uuid.uuid4().hex[:8]}"
