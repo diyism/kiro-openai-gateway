@@ -45,10 +45,13 @@ from kiro_gateway.models import (
     ModelList,
     ChatCompletionRequest,
 )
+from kiro_gateway.anthropic_models import AnthropicMessagesRequest
 from kiro_gateway.auth import KiroAuthManager
 from kiro_gateway.cache import ModelInfoCache
 from kiro_gateway.converters import build_kiro_payload
+from kiro_gateway.anthropic_converters import build_kiro_payload_from_anthropic
 from kiro_gateway.streaming import stream_kiro_to_openai, collect_stream_response, stream_with_first_token_retry
+from kiro_gateway.anthropic_streaming import stream_kiro_to_anthropic, collect_anthropic_response
 from kiro_gateway.http_client import KiroHttpClient
 from kiro_gateway.utils import get_kiro_headers, generate_conversation_id
 
@@ -383,6 +386,200 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
         # Log access log for internal error
         logger.error(f"HTTP 500 - POST /v1/chat/completions - {str(e)[:100]}")
         # Flush debug logs on internal error ("errors" mode)
+        if debug_logger:
+            debug_logger.flush_on_error(500, str(e))
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.post("/v1/messages", dependencies=[Depends(verify_api_key)])
+async def anthropic_messages(request: Request, request_data: AnthropicMessagesRequest):
+    """
+    Anthropic Messages API endpoint - compatible with Claude Code.
+
+    Accepts requests in Anthropic Messages API format and translates them to Kiro API.
+    Supports streaming and non-streaming modes.
+
+    Args:
+        request: FastAPI Request for accessing app.state
+        request_data: Request in Anthropic Messages API format
+
+    Returns:
+        StreamingResponse for streaming mode
+        JSONResponse for non-streaming mode
+
+    Raises:
+        HTTPException: On validation or API errors
+    """
+    logger.info(f"Request to /v1/messages (model={request_data.model}, stream={request_data.stream})")
+
+    auth_manager: KiroAuthManager = request.app.state.auth_manager
+    model_cache: ModelInfoCache = request.app.state.model_cache
+
+    # Prepare debug logs
+    if debug_logger:
+        debug_logger.prepare_new_request()
+
+    # Log incoming request
+    try:
+        request_body = json.dumps(request_data.model_dump(), ensure_ascii=False, indent=2).encode('utf-8')
+        if debug_logger:
+            debug_logger.log_request_body(request_body)
+    except Exception as e:
+        logger.warning(f"Failed to log request body: {e}")
+
+    # Lazy model cache population
+    if model_cache.is_empty():
+        logger.debug("Model cache is empty, skipping forced population")
+
+    # Generate conversation ID
+    conversation_id = generate_conversation_id()
+
+    # Generate request ID for Anthropic response
+    request_id = f"msg_{generate_conversation_id()}"
+
+    # Build payload for Kiro
+    try:
+        kiro_payload = build_kiro_payload_from_anthropic(
+            request_data,
+            conversation_id,
+            auth_manager.profile_arn or ""
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Log Kiro payload
+    try:
+        kiro_request_body = json.dumps(kiro_payload, ensure_ascii=False, indent=2).encode('utf-8')
+        if debug_logger:
+            debug_logger.log_kiro_request_body(kiro_request_body)
+    except Exception as e:
+        logger.warning(f"Failed to log Kiro request: {e}")
+
+    # Create HTTP client with retry logic
+    http_client = KiroHttpClient(auth_manager)
+    url = f"{auth_manager.api_host}/generateAssistantResponse"
+
+    try:
+        # Make request to Kiro API
+        response = await http_client.request_with_retry(
+            "POST",
+            url,
+            kiro_payload,
+            stream=True
+        )
+
+        if response.status_code != 200:
+            try:
+                error_content = await response.aread()
+            except Exception:
+                error_content = b"Unknown error"
+
+            await http_client.close()
+            error_text = error_content.decode('utf-8', errors='replace')
+            logger.error(f"Error from Kiro API: {response.status_code} - {error_text}")
+
+            # Try to parse JSON response from Kiro
+            error_message = error_text
+            try:
+                error_json = json.loads(error_text)
+                if "message" in error_json:
+                    error_message = error_json["message"]
+                    if "reason" in error_json:
+                        error_message = f"{error_message} (reason: {error_json['reason']})"
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+            # Log access log for error
+            logger.warning(
+                f"HTTP {response.status_code} - POST /v1/messages - {error_message[:100]}"
+            )
+
+            # Flush debug logs on error
+            if debug_logger:
+                debug_logger.flush_on_error(response.status_code, error_message)
+
+            # Return error in Anthropic API format
+            return JSONResponse(
+                status_code=response.status_code,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": error_message
+                    }
+                }
+            )
+
+        if request_data.stream:
+            # Streaming mode
+            async def stream_wrapper():
+                streaming_error = None
+                client_disconnected = False
+                try:
+                    async for chunk in stream_kiro_to_anthropic(
+                        http_client.client,
+                        response,
+                        request_data.model,
+                        request_id
+                    ):
+                        yield chunk
+                except GeneratorExit:
+                    # Client disconnected
+                    client_disconnected = True
+                    logger.debug("Client disconnected during streaming (GeneratorExit in routes)")
+                except Exception as e:
+                    streaming_error = e
+                    raise
+                finally:
+                    await http_client.close()
+                    # Log access log
+                    if streaming_error:
+                        error_type = type(streaming_error).__name__
+                        error_msg = str(streaming_error) if str(streaming_error) else "(empty message)"
+                        logger.error(f"HTTP 500 - POST /v1/messages (streaming) - [{error_type}] {error_msg[:100]}")
+                    elif client_disconnected:
+                        logger.info(f"HTTP 200 - POST /v1/messages (streaming) - client disconnected")
+                    else:
+                        logger.info(f"HTTP 200 - POST /v1/messages (streaming) - completed")
+                    # Write debug logs
+                    if debug_logger:
+                        if streaming_error:
+                            debug_logger.flush_on_error(500, str(streaming_error))
+                        else:
+                            debug_logger.discard_buffers()
+
+            return StreamingResponse(stream_wrapper(), media_type="text/event-stream")
+
+        else:
+            # Non-streaming mode
+            anthropic_response = await collect_anthropic_response(
+                http_client.client,
+                response,
+                request_data.model,
+                request_id
+            )
+
+            await http_client.close()
+
+            # Log access log
+            logger.info(f"HTTP 200 - POST /v1/messages (non-streaming) - completed")
+
+            # Write debug logs
+            if debug_logger:
+                debug_logger.discard_buffers()
+
+            return JSONResponse(content=anthropic_response)
+
+    except HTTPException as e:
+        await http_client.close()
+        logger.warning(f"HTTP {e.status_code} - POST /v1/messages - {e.detail}")
+        if debug_logger:
+            debug_logger.flush_on_error(e.status_code, str(e.detail))
+        raise
+    except Exception as e:
+        await http_client.close()
+        logger.error(f"Internal error: {e}", exc_info=True)
+        logger.error(f"HTTP 500 - POST /v1/messages - {str(e)[:100]}")
         if debug_logger:
             debug_logger.flush_on_error(500, str(e))
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
