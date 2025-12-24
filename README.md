@@ -42,7 +42,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/Jwadow/kiro-openai-gateway.git
+git clone https://github.com/diyism/kiro-openai-gateway.git
 cd kiro-openai-gateway
 
 # Install dependencies
